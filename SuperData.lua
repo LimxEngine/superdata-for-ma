@@ -1,31 +1,52 @@
--- *********************************************
--- SuperData Protocol Client for GrandMA2
--- Version: 2.0.0
--- Protocol: SuperData v2.0 (群聊模式)
--- Author: Yunsio SuperStage Team
--- *********************************************
+-- ╔═══════════════════════════════════════════════════════════════════════════╗
+-- ║                   SuperData Protocol Client for GrandMA2                  ║
+-- ║                                                                           ║
+-- ║  Version:    2.0.0 (Production Release)                                   ║
+-- ║  Protocol:   SuperData v2.0                                               ║
+-- ║  Author:     Yunsio SuperStage Team                                       ║
+-- ║  Website:    https://yunsio.com/superdata                                 ║
+-- ║  License:    CC BY-NC 4.0                                                 ║
+-- ║                                                                           ║
+-- ║  Description:                                                             ║
+-- ║    Cross-platform fixture data synchronization plugin for GrandMA2.       ║
+-- ║    Supports importing fixtures from Unity, Unreal Engine, Vectorworks.    ║
+-- ║                                                                           ║
+-- ╚═══════════════════════════════════════════════════════════════════════════╝
 
 local internal_name = select(1, ...)
 local visible_name = select(2, ...)
 
--- ===========================================
--- 协议常量定义 (v2.0)
--- ===========================================
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 版本信息
+-- ═══════════════════════════════════════════════════════════════════════════
+local VERSION = {
+    MAJOR = 2,
+    MINOR = 0,
+    PATCH = 0,
+    STRING = "2.0.0",
+    DATE = "2025-12-01"
+}
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 协议常量定义 (SuperData Protocol v2.0)
+-- ═══════════════════════════════════════════════════════════════════════════
 local SUPERDATA = {
     -- 协议标识
     MAGIC = "SPDT",
     VERSION = 2,
     VERSION_STRING = "2.0",
     HEADER_SIZE = 24,
+    MAX_PACKET_SIZE = 65536,
     
-    -- 端口 (v2.0 只有 TCP)
+    -- 网络配置
     DATA_PORT = 5966,
     LISTEN_ADDRESS = "127.0.0.1",
     
-    -- 时间间隔 (秒)
+    -- 时间配置 (秒)
     HEARTBEAT_INTERVAL = 3.0,
-    TIMEOUT = 10.0,
     CONNECT_TIMEOUT = 5.0,
+    RECEIVE_TIMEOUT = 10.0,
+    SERVER_START_TIMEOUT = 5.0,
     
     -- 平台代码
     PLATFORM = {
@@ -37,61 +58,63 @@ local SUPERDATA = {
         CUSTOM = 255
     },
     
-    -- 数据包类型 (v2.0)
-    PKT = {
-        -- 连接管理
-        CONNECT             = 0x0010,
-        CONNECT_ACK         = 0x0011,
-        DISCONNECT          = 0x0012,
-        HEARTBEAT           = 0x0013,
-        -- 客户端管理 (v2.0 新增)
-        CLIENT_JOINED       = 0x0014,
-        CLIENT_LEFT         = 0x0015,
-        -- 数据同步
-        FIXTURE_LIST_REQ    = 0x0020,
-        FIXTURE_LIST_RESP   = 0x0021,
-        FIXTURE_UPDATE      = 0x0022,
-        FIXTURE_FULL_SYNC   = 0x0023,  -- v2.0: 替代原 FIXTURE_CREATE
-        FIXTURE_DELETE      = 0x0024,
-        -- 错误
-        ERROR               = 0xFF00
+    -- 平台显示名称
+    PLATFORM_NAMES = {
+        [0] = "Unknown",
+        [1] = "Unity",
+        [2] = "Unreal Engine",
+        [3] = "Vectorworks",
+        [4] = "GrandMA",
+        [255] = "Custom"
     },
     
-    -- 错误代码
-    ERROR_CODE = {
-        NONE = 0,
-        INVALID_PACKET = 1,
-        VERSION_MISMATCH = 2,
-        CONNECTION_REFUSED = 3,
-        TIMEOUT = 4,
-        CLIENT_NOT_FOUND = 8,
-        INTERNAL_ERROR = 255
+    -- 数据包类型
+    PKT = {
+        CONNECT         = 0x0010,
+        CONNECT_ACK     = 0x0011,
+        DISCONNECT      = 0x0012,
+        HEARTBEAT       = 0x0013,
+        CLIENT_JOINED   = 0x0014,
+        CLIENT_LEFT     = 0x0015,
+        FIXTURE_LIST_REQ  = 0x0020,
+        FIXTURE_LIST_RESP = 0x0021,
+        FIXTURE_UPDATE    = 0x0022,
+        FIXTURE_FULL_SYNC = 0x0023,
+        FIXTURE_DELETE    = 0x0024,
+        ERROR           = 0xFF00
     }
 }
 
--- 获取包类型名称
-function SUPERDATA.getPacketTypeName(packetType)
-    for name, value in pairs(SUPERDATA.PKT) do
-        if value == packetType then
-            return name
-        end
-    end
-    return string.format("Unknown(0x%04X)", packetType)
-end
-
--- 获取平台名称
+-- 获取平台显示名称
 function SUPERDATA.getPlatformName(platform)
-    for name, value in pairs(SUPERDATA.PLATFORM) do
-        if value == platform then
-            return name
-        end
-    end
-    return "Unknown"
+    return SUPERDATA.PLATFORM_NAMES[platform] or "Unknown"
 end
 
--- ===========================================
--- JSON 序列化/反序列化模块
--- ===========================================
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 日志模块
+-- ═══════════════════════════════════════════════════════════════════════════
+local Log = {
+    PREFIX = "[SuperData]",
+    DEBUG_MODE = false  -- 生产环境关闭调试日志
+}
+
+function Log.info(msg)
+    gma.echo(Log.PREFIX .. " " .. msg)
+end
+
+function Log.error(msg)
+    gma.echo(Log.PREFIX .. " ERROR: " .. msg)
+end
+
+function Log.debug(msg)
+    if Log.DEBUG_MODE then
+        gma.echo(Log.PREFIX .. " [DEBUG] " .. msg)
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- JSON 模块 (轻量级实现)
+-- ═══════════════════════════════════════════════════════════════════════════
 local JSON = {}
 
 function JSON.encode(val)
@@ -101,36 +124,26 @@ function JSON.encode(val)
     elseif t == "boolean" then
         return val and "true" or "false"
     elseif t == "number" then
-        if val ~= val then return "null" end -- NaN
+        if val ~= val then return "null" end
         if val >= math.huge then return "1e999" end
         if val <= -math.huge then return "-1e999" end
         return tostring(val)
     elseif t == "string" then
         local s = val:gsub('[\\"\x00-\x1f]', function(c)
-            local codes = {
-                ['\\'] = '\\\\', ['"'] = '\\"', ['\n'] = '\\n',
-                ['\r'] = '\\r', ['\t'] = '\\t'
-            }
+            local codes = {['\\']='\\\\', ['"']='\\"', ['\n']='\\n', ['\r']='\\r', ['\t']='\\t'}
             return codes[c] or string.format('\\u%04x', c:byte())
         end)
         return '"' .. s .. '"'
     elseif t == "table" then
         local isArray = #val > 0 or next(val) == nil
-        -- 检查是否为纯数组
         if isArray then
-            for k, _ in pairs(val) do
-                if type(k) ~= "number" then
-                    isArray = false
-                    break
-                end
+            for k in pairs(val) do
+                if type(k) ~= "number" then isArray = false; break end
             end
         end
-        
         local parts = {}
         if isArray then
-            for i, v in ipairs(val) do
-                parts[i] = JSON.encode(v)
-            end
+            for i, v in ipairs(val) do parts[i] = JSON.encode(v) end
             return "[" .. table.concat(parts, ",") .. "]"
         else
             local i = 1
@@ -149,21 +162,19 @@ end
 function JSON.decode(str)
     if not str or str == "" then return nil end
     local pos = 1
-    local char = function() return str:sub(pos, pos) end
-    local skip_ws = function()
+    local function char() return str:sub(pos, pos) end
+    local function skip_ws()
         while char():match("[ \t\n\r]") do pos = pos + 1 end
     end
     
     local parse_value, parse_string, parse_number, parse_array, parse_object
     
     parse_string = function()
-        pos = pos + 1 -- skip opening "
+        pos = pos + 1
         local result = ""
         while pos <= #str do
             local c = char()
-            if c == '"' then
-                pos = pos + 1
-                return result
+            if c == '"' then pos = pos + 1; return result
             elseif c == '\\' then
                 pos = pos + 1
                 local esc = char()
@@ -175,16 +186,11 @@ function JSON.decode(str)
                 elseif esc == 'u' then
                     local hex = str:sub(pos+1, pos+4)
                     local code = tonumber(hex, 16)
-                    if code and code < 128 then
-                        result = result .. string.char(code)
-                    else
-                        result = result .. '?'
-                    end
+                    if code and code < 128 then result = result .. string.char(code)
+                    else result = result .. '?' end
                     pos = pos + 4
                 end
-            else
-                result = result .. c
-            end
+            else result = result .. c end
             pos = pos + 1
         end
         return result
@@ -208,36 +214,25 @@ function JSON.decode(str)
     
     parse_array = function()
         local arr = {}
-        pos = pos + 1 -- skip [
+        pos = pos + 1
         skip_ws()
-        if char() == ']' then
-            pos = pos + 1
-            return arr
-        end
+        if char() == ']' then pos = pos + 1; return arr end
         while true do
             skip_ws()
             arr[#arr + 1] = parse_value()
             skip_ws()
-            if char() == ']' then
-                pos = pos + 1
-                return arr
-            elseif char() == ',' then
-                pos = pos + 1
-            else
-                break
-            end
+            if char() == ']' then pos = pos + 1; return arr
+            elseif char() == ',' then pos = pos + 1
+            else break end
         end
         return arr
     end
     
     parse_object = function()
         local obj = {}
-        pos = pos + 1 -- skip {
+        pos = pos + 1
         skip_ws()
-        if char() == '}' then
-            pos = pos + 1
-            return obj
-        end
+        if char() == '}' then pos = pos + 1; return obj end
         while true do
             skip_ws()
             if char() ~= '"' then break end
@@ -248,14 +243,9 @@ function JSON.decode(str)
             skip_ws()
             obj[key] = parse_value()
             skip_ws()
-            if char() == '}' then
-                pos = pos + 1
-                return obj
-            elseif char() == ',' then
-                pos = pos + 1
-            else
-                break
-            end
+            if char() == '}' then pos = pos + 1; return obj
+            elseif char() == ',' then pos = pos + 1
+            else break end
         end
         return obj
     end
@@ -274,23 +264,19 @@ function JSON.decode(str)
         return nil
     end
     
-    return parse_value()
+    local ok, result = pcall(parse_value)
+    return ok and result or nil
 end
 
--- ===========================================
+-- ═══════════════════════════════════════════════════════════════════════════
 -- 二进制数据处理模块
--- ===========================================
+-- ═══════════════════════════════════════════════════════════════════════════
 local Binary = {}
 
--- 写入 Little Endian uint16
 function Binary.writeUInt16LE(value)
-    return string.char(
-        value % 256,
-        math.floor(value / 256) % 256
-    )
+    return string.char(value % 256, math.floor(value / 256) % 256)
 end
 
--- 写入 Little Endian uint32
 function Binary.writeUInt32LE(value)
     return string.char(
         value % 256,
@@ -300,114 +286,71 @@ function Binary.writeUInt32LE(value)
     )
 end
 
--- 写入 Little Endian int64
 function Binary.writeInt64LE(value)
     local low = value % 4294967296
     local high = math.floor(value / 4294967296)
     return Binary.writeUInt32LE(low) .. Binary.writeUInt32LE(high)
 end
 
--- 读取 Little Endian uint16
 function Binary.readUInt16LE(data, offset)
     offset = offset or 1
     local b1, b2 = data:byte(offset, offset + 1)
     return b1 + b2 * 256
 end
 
--- 读取 Little Endian uint32
 function Binary.readUInt32LE(data, offset)
     offset = offset or 1
     local b1, b2, b3, b4 = data:byte(offset, offset + 3)
     return b1 + b2 * 256 + b3 * 65536 + b4 * 16777216
 end
 
--- 读取 Little Endian int64
-function Binary.readInt64LE(data, offset)
-    offset = offset or 1
-    local low = Binary.readUInt32LE(data, offset)
-    local high = Binary.readUInt32LE(data, offset + 4)
-    return low + high * 4294967296
-end
-
--- ===========================================
--- 服务器启动模块 (v2.0 新增)
--- ===========================================
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 服务器启动模块
+-- ═══════════════════════════════════════════════════════════════════════════
 local ServerLauncher = {}
 
--- 注册表路径
 ServerLauncher.REGISTRY_KEY = [[HKLM\SOFTWARE\Yunsio\SuperData]]
-ServerLauncher.REGISTRY_VALUE = "ExePath"
-
--- 默认安装路径
 ServerLauncher.DEFAULT_PATHS = {
     [[C:\Program Files\Yunsio\SuperData\SuperDataServer.exe]],
     [[C:\Program Files (x86)\Yunsio\SuperData\SuperDataServer.exe]],
 }
 
--- 检查文件是否存在
 function ServerLauncher.fileExists(path)
     local f = io.open(path, "r")
-    if f then
-        f:close()
-        return true
-    end
+    if f then f:close(); return true end
     return false
 end
 
--- 从注册表获取服务器路径 (Windows)
 function ServerLauncher.getServerPathFromRegistry()
-    local handle = io.popen('reg query "' .. ServerLauncher.REGISTRY_KEY .. '" /v ' .. ServerLauncher.REGISTRY_VALUE .. ' 2>nul')
-    if not handle then
-        return nil
-    end
-    
+    local handle = io.popen('reg query "' .. ServerLauncher.REGISTRY_KEY .. '" /v ExePath 2>nul')
+    if not handle then return nil end
     local result = handle:read("*a")
     handle:close()
-    
-    -- 解析输出: ExePath    REG_SZ    C:\...\SuperDataServer.exe
     local path = result:match("ExePath%s+REG_SZ%s+(.-)%s*[\r\n]")
-    if path and ServerLauncher.fileExists(path) then
-        return path
-    end
-    
+    if path and ServerLauncher.fileExists(path) then return path end
     return nil
 end
 
--- 获取服务器可执行文件路径
 function ServerLauncher.getServerPath()
-    -- 1. 注册表
     local regPath = ServerLauncher.getServerPathFromRegistry()
-    if regPath then
-        return regPath
-    end
-    
-    -- 2. 环境变量
+    if regPath then return regPath end
     local envPath = os.getenv("SUPERDATA_SERVER_PATH")
-    if envPath and ServerLauncher.fileExists(envPath) then
-        return envPath
-    end
-    
-    -- 3. 默认路径
+    if envPath and ServerLauncher.fileExists(envPath) then return envPath end
     for _, path in ipairs(ServerLauncher.DEFAULT_PATHS) do
-        if ServerLauncher.fileExists(path) then
-            return path
-        end
+        if ServerLauncher.fileExists(path) then return path end
     end
-    
     return nil
 end
 
--- 启动服务器进程
 function ServerLauncher.startServer(serverPath)
-    -- Windows: 后台启动
     local cmd = 'start /B "" "' .. serverPath .. '"'
     local result = os.execute(cmd)
     return result == 0 or result == true
 end
 
--- ===========================================
+-- ═══════════════════════════════════════════════════════════════════════════
 -- UUID 生成
--- ===========================================
+-- ═══════════════════════════════════════════════════════════════════════════
 local function generateUuid()
     local template = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx"
     return string.gsub(template, "[xy]", function(c)
@@ -416,286 +359,174 @@ local function generateUuid()
     end)
 end
 
--- ===========================================
--- SuperData 客户端类 (v2.0)
--- ===========================================
-local SuperDataClient = {
-    -- 状态
-    connected = false,
-    sequenceNumber = 0,
-    
-    -- Socket
-    tcpSocket = nil,
-    socket = nil,  -- LuaSocket 库引用
-    
-    -- 接收缓冲区
-    receiveBuffer = "",
-    
-    -- 客户端信息
-    clientInfo = nil,
-    
-    -- 群聊成员 (v2.0)
-    otherClients = {},
-    
-    -- 灯具数据
-    fixtures = {},
-    
-    -- 计时器
-    lastHeartbeat = 0,
-    
-    -- 回调
-    onConnected = nil,
-    onDisconnected = nil,
-    onClientJoined = nil,
-    onClientLeft = nil,
-    onFixturesReceived = nil,
-    onError = nil
-}
+-- ═══════════════════════════════════════════════════════════════════════════
+-- SuperData 客户端类
+-- ═══════════════════════════════════════════════════════════════════════════
+local SuperDataClient = {}
+SuperDataClient.__index = SuperDataClient
 
--- 获取当前时间戳 (毫秒)
-function SuperDataClient:getTimestamp()
-    return math.floor(gma.gettime() * 1000)
+function SuperDataClient.new()
+    local self = setmetatable({}, SuperDataClient)
+    self.connected = false
+    self.sequenceNumber = 0
+    self.tcpSocket = nil
+    self.socket = nil
+    self.receiveBuffer = ""
+    self.clientInfo = nil
+    self.otherClients = {}
+    self.fixtures = {}
+    self.lastHeartbeat = 0
+    return self
 end
 
--- 初始化
 function SuperDataClient:init()
-    -- 设置随机种子
     math.randomseed(os.time())
-    
-    -- 初始化客户端信息 (v2.0 简化格式)
     self.clientInfo = {
         clientId = generateUuid(),
-        clientName = "GrandMA2 Client",
+        clientName = "GrandMA2",
         platform = SUPERDATA.PLATFORM.GRANDMA,
         platformVersion = gma.git_version() or "3.3.4",
         protocolVersion = SUPERDATA.VERSION_STRING
     }
-    
     self.otherClients = {}
     self.fixtures = {}
     self.receiveBuffer = ""
-    
-    gma.echo("[SuperData] Initialized - ID: " .. self.clientInfo.clientId:sub(1, 8) .. "...")
+    Log.info("Client initialized (ID: " .. self.clientInfo.clientId:sub(1, 8) .. "...)")
     return true
 end
 
--- 构建数据包
+function SuperDataClient:getTimestamp()
+    return math.floor(gma.gettime() * 1000)
+end
+
 function SuperDataClient:buildPacket(packetType, payload)
     self.sequenceNumber = self.sequenceNumber + 1
-    
-    local payloadStr = ""
-    if payload then
-        payloadStr = JSON.encode(payload)
-    else
-        payloadStr = "{}"
-    end
-    
+    local payloadStr = payload and JSON.encode(payload) or "{}"
     local header = SUPERDATA.MAGIC
         .. Binary.writeUInt16LE(SUPERDATA.VERSION)
         .. Binary.writeUInt16LE(packetType)
         .. Binary.writeUInt32LE(self.sequenceNumber)
         .. Binary.writeInt64LE(self:getTimestamp())
         .. Binary.writeUInt32LE(#payloadStr)
-    
     return header .. payloadStr
 end
 
--- 解析包头
 function SuperDataClient:parseHeader(data)
-    if #data < SUPERDATA.HEADER_SIZE then
-        return nil
-    end
-    
-    -- 验证魔数
-    local magic = data:sub(1, 4)
-    if magic ~= SUPERDATA.MAGIC then
-        return nil
-    end
-    
+    if #data < SUPERDATA.HEADER_SIZE then return nil end
+    if data:sub(1, 4) ~= SUPERDATA.MAGIC then return nil end
     return {
-        magic = magic,
         version = Binary.readUInt16LE(data, 5),
         packetType = Binary.readUInt16LE(data, 7),
         sequenceNumber = Binary.readUInt32LE(data, 9),
-        timestamp = Binary.readInt64LE(data, 13),
         payloadLength = Binary.readUInt32LE(data, 21)
     }
 end
 
--- 尝试解析数据包
 function SuperDataClient:tryParsePacket()
-    if #self.receiveBuffer < SUPERDATA.HEADER_SIZE then
-        return nil, 0
-    end
-    
-    -- 解析包头
+    if #self.receiveBuffer < SUPERDATA.HEADER_SIZE then return nil, 0 end
     local header = self:parseHeader(self.receiveBuffer)
-    if not header then
-        return nil, 0
-    end
-    
-    -- 计算完整包长度
+    if not header then return nil, 0 end
     local totalLength = SUPERDATA.HEADER_SIZE + header.payloadLength
+    if #self.receiveBuffer < totalLength then return nil, 0 end
     
-    -- 检查数据是否完整
-    if #self.receiveBuffer < totalLength then
-        return nil, 0
-    end
-    
-    -- 解析负载
-    local packet = {
-        header = header,
-        payload = nil
-    }
-    
+    local packet = { header = header, payload = {} }
     if header.payloadLength > 0 then
         local payloadStr = self.receiveBuffer:sub(SUPERDATA.HEADER_SIZE + 1, totalLength)
-        local ok, result = pcall(JSON.decode, payloadStr)
-        if ok then
-            packet.payload = result
-        else
-            packet.payload = {}
-        end
-    else
-        packet.payload = {}
+        packet.payload = JSON.decode(payloadStr) or {}
     end
-    
     return packet, totalLength
 end
 
--- 加载 Socket 库
 function SuperDataClient:loadSocket()
-    gma.echo("[SuperData] Loading socket library...")
-    
-    -- 尝试多种路径
-    local paths = {
-        "./plugins/requirements/?.lua",
-        "./plugins/?.lua",
-        "./?.lua"
-    }
-    
+    local paths = {"./plugins/requirements/?.lua", "./plugins/?.lua", "./?.lua"}
     for _, path in ipairs(paths) do
         package.path = package.path .. ";" .. path
     end
     
-    -- 尝试不同的加载方式
-    local loadMethods = {
-        {"socket.socket", "socket.socket"},
-        {"socket.core", "socket.core"},
-        {"socket", "socket"}
-    }
-    
+    local loadMethods = {"socket.socket", "socket.core", "socket"}
     for _, method in ipairs(loadMethods) do
-        local ok, socket = pcall(function()
-            return require(method[1])
-        end)
+        local ok, socket = pcall(require, method)
         if ok and socket then
             self.socket = socket
-            gma.echo("[SuperData] Socket loaded via '" .. method[2] .. "'")
+            Log.debug("Socket loaded via '" .. method .. "'")
             return true
         end
     end
-    
-    gma.echo("[SuperData] ERROR: All socket loading methods failed!")
+    Log.error("Socket library not found")
     return false
 end
 
--- 检查服务器是否运行
 function SuperDataClient:isServerRunning()
     if not self.socket then return false end
-    
     local tcp = self.socket.tcp()
     tcp:settimeout(0.1)
-    
     local result = tcp:connect(SUPERDATA.LISTEN_ADDRESS, SUPERDATA.DATA_PORT)
     tcp:close()
-    
     return result ~= nil
 end
 
--- 确保服务器运行 (v2.0 新增)
 function SuperDataClient:ensureServerRunning()
-    -- 1. 检查是否已运行
     if self:isServerRunning() then
-        gma.echo("[SuperData] Server already running")
+        Log.info("Server is running")
         return true
     end
     
-    -- 2. 查找服务器路径
     local serverPath = ServerLauncher.getServerPath()
     if not serverPath then
-        gma.echo("[SuperData] ERROR: SuperData Server not installed!")
-        gma.echo("[SuperData] Please install from: https://yunsio.com/superdata")
+        Log.error("SuperData Server not installed")
         return false
     end
     
-    gma.echo("[SuperData] Starting server: " .. serverPath)
-    
-    -- 3. 启动服务器
+    Log.info("Starting server...")
     if not ServerLauncher.startServer(serverPath) then
-        gma.echo("[SuperData] Failed to start server")
+        Log.error("Failed to start server")
         return false
     end
     
-    -- 4. 等待服务器就绪
     local startTime = gma.gettime()
-    while gma.gettime() - startTime < SUPERDATA.CONNECT_TIMEOUT do
+    while gma.gettime() - startTime < SUPERDATA.SERVER_START_TIMEOUT do
         gma.sleep(0.1)
         if self:isServerRunning() then
-            gma.echo("[SuperData] Server is ready")
+            Log.info("Server started successfully")
             return true
         end
     end
     
-    gma.echo("[SuperData] Server start timeout")
+    Log.error("Server start timeout")
     return false
 end
 
--- 连接到服务器 (v2.0 重构)
 function SuperDataClient:connect(autoStartServer)
     if autoStartServer == nil then autoStartServer = true end
     
-    if not self.socket then
-        if not self:loadSocket() then
-            return false, "Socket library not available"
-        end
+    if not self.socket and not self:loadSocket() then
+        return false, "Socket library not available.\nPlease check LuaSocket installation."
     end
     
-    -- 自动启动服务器
-    if autoStartServer then
-        if not self:ensureServerRunning() then
-            return false, "Server not available. Please install SuperData Server."
-        end
+    if autoStartServer and not self:ensureServerRunning() then
+        return false, "SuperData Server not available.\n\nPlease install from:\nhttps://yunsio.com/superdata"
     end
     
-    gma.echo("[SuperData] Connecting to " .. SUPERDATA.LISTEN_ADDRESS .. ":" .. SUPERDATA.DATA_PORT .. "...")
+    Log.info("Connecting to server...")
     
-    -- 创建 TCP socket
     local tcp, err = self.socket.tcp()
     if not tcp then
-        return false, "Failed to create TCP socket: " .. (err or "unknown")
+        return false, "Failed to create socket: " .. (err or "unknown")
     end
     
-    -- 设置超时
     tcp:settimeout(SUPERDATA.CONNECT_TIMEOUT)
-    
-    -- 连接
     local ok, err = tcp:connect(SUPERDATA.LISTEN_ADDRESS, SUPERDATA.DATA_PORT)
     if not ok then
         tcp:close()
         return false, "Connection failed: " .. (err or "unknown")
     end
     
-    -- 禁用 Nagle 算法
     tcp:setoption("tcp-nodelay", true)
-    
-    -- 设置非阻塞
     tcp:settimeout(0)
     
     self.tcpSocket = tcp
     self.receiveBuffer = ""
     
-    -- 发送 Connect 请求 (v2.0 格式)
     local connectPayload = {
         clientId = self.clientInfo.clientId,
         clientName = self.clientInfo.clientName,
@@ -706,113 +537,83 @@ function SuperDataClient:connect(autoStartServer)
     
     local packet = self:buildPacket(SUPERDATA.PKT.CONNECT, connectPayload)
     local sent, err = tcp:send(packet)
-    
     if not sent then
         tcp:close()
         self.tcpSocket = nil
-        return false, "Failed to send connect: " .. (err or "unknown")
+        return false, "Failed to send connect request"
     end
     
-    -- 等待 ConnectAck
     tcp:settimeout(SUPERDATA.CONNECT_TIMEOUT)
-    
     local startTime = gma.gettime()
     while gma.gettime() - startTime < SUPERDATA.CONNECT_TIMEOUT do
         self:receiveData()
         self:processReceivedData()
-        
         if self.connected then
             tcp:settimeout(0)
             return true
         end
-        
-        gma.sleep(0.1)
+        gma.sleep(0.05)
     end
     
     tcp:close()
     self.tcpSocket = nil
-    return false, "Connection timeout - no response from server"
+    return false, "Connection timeout - server not responding"
 end
 
--- 接收数据
 function SuperDataClient:receiveData()
     if not self.tcpSocket then return end
-    
     while true do
         local data, err, partial = self.tcpSocket:receive(4096)
-        
         if data then
             self.receiveBuffer = self.receiveBuffer .. data
         elseif partial and #partial > 0 then
             self.receiveBuffer = self.receiveBuffer .. partial
         end
-        
         if err == "closed" then
-            gma.echo("[SuperData] Server closed connection")
+            Log.info("Server closed connection")
             self:disconnect()
             return
-        elseif err == "timeout" then
-            break
-        elseif err then
-            break
-        end
-        
-        if not data then
+        elseif err == "timeout" or not data then
             break
         end
     end
 end
 
--- 处理接收的数据 (TCP 粘包处理)
 function SuperDataClient:processReceivedData()
     while #self.receiveBuffer >= SUPERDATA.HEADER_SIZE do
         local packet, consumed = self:tryParsePacket()
-        
-        if not packet or consumed == 0 then
-            break
-        end
-        
-        -- 移除已处理的数据
+        if not packet or consumed == 0 then break end
         self.receiveBuffer = self.receiveBuffer:sub(consumed + 1)
-        
-        -- 处理数据包
         self:handlePacket(packet)
     end
 end
 
--- 处理数据包
 function SuperDataClient:handlePacket(packet)
-    local packetType = packet.header.packetType
+    local pktType = packet.header.packetType
     local payload = packet.payload or {}
     
-    if packetType == SUPERDATA.PKT.CONNECT_ACK then
+    if pktType == SUPERDATA.PKT.CONNECT_ACK then
         self:handleConnectAck(payload)
-    elseif packetType == SUPERDATA.PKT.HEARTBEAT then
-        -- 心跳响应，无需处理
-    elseif packetType == SUPERDATA.PKT.CLIENT_JOINED then
+    elseif pktType == SUPERDATA.PKT.HEARTBEAT then
+        -- OK
+    elseif pktType == SUPERDATA.PKT.CLIENT_JOINED then
         self:handleClientJoined(payload)
-    elseif packetType == SUPERDATA.PKT.CLIENT_LEFT then
+    elseif pktType == SUPERDATA.PKT.CLIENT_LEFT then
         self:handleClientLeft(payload)
-    elseif packetType == SUPERDATA.PKT.FIXTURE_LIST_RESP then
+    elseif pktType == SUPERDATA.PKT.FIXTURE_LIST_RESP then
         self:handleFixtureListResponse(payload)
-    elseif packetType == SUPERDATA.PKT.ERROR then
-        self:handleError(payload)
-    else
-        gma.echo("[SuperData] Unknown packet type: " .. SUPERDATA.getPacketTypeName(packetType))
+    elseif pktType == SUPERDATA.PKT.ERROR then
+        local msg = payload.errorMessage or payload.message or "Unknown error"
+        Log.error("Server: " .. msg)
     end
 end
 
--- 处理 ConnectAck (v2.0)
 function SuperDataClient:handleConnectAck(payload)
-    local accepted = payload.accepted or payload.success
-    
-    if not accepted then
-        local errMsg = payload.errorMessage or payload.message or "Connection rejected"
-        gma.echo("[SuperData] Connection rejected: " .. errMsg)
+    if not (payload.accepted or payload.success) then
+        Log.error("Connection rejected: " .. (payload.errorMessage or "unknown"))
         return
     end
     
-    -- 解析群聊中的其他客户端
     self.otherClients = {}
     if payload.clients then
         for _, c in ipairs(payload.clients) do
@@ -820,7 +621,7 @@ function SuperDataClient:handleConnectAck(payload)
                 self.otherClients[c.clientId] = {
                     clientId = c.clientId,
                     clientName = c.clientName or "Unknown",
-                    platform = c.platform or SUPERDATA.PLATFORM.UNKNOWN,
+                    platform = c.platform or 0,
                     fixtureCount = c.fixtureCount or 0
                 }
             end
@@ -830,108 +631,47 @@ function SuperDataClient:handleConnectAck(payload)
     self.connected = true
     self.lastHeartbeat = gma.gettime()
     
-    local clientCount = 0
-    for _ in pairs(self.otherClients) do clientCount = clientCount + 1 end
-    
-    gma.echo("[SuperData] Connected! Found " .. clientCount .. " other clients in session")
-    
-    if self.onConnected then
-        self.onConnected()
-    end
+    local count = 0
+    for _ in pairs(self.otherClients) do count = count + 1 end
+    Log.info("Connected! Found " .. count .. " data source(s)")
 end
 
--- 处理 ClientJoined (v2.0 新增)
 function SuperDataClient:handleClientJoined(payload)
     local info = payload.client or payload
-    
     if info and info.clientId and info.clientId ~= self.clientInfo.clientId then
         self.otherClients[info.clientId] = {
             clientId = info.clientId,
             clientName = info.clientName or "Unknown",
-            platform = info.platform or SUPERDATA.PLATFORM.UNKNOWN,
+            platform = info.platform or 0,
             fixtureCount = info.fixtureCount or 0
         }
-        
-        gma.echo("[SuperData] Client joined: " .. (info.clientName or "Unknown") .. 
-                 " (" .. SUPERDATA.getPlatformName(info.platform or 0) .. ")")
-        
-        if self.onClientJoined then
-            self.onClientJoined(info)
-        end
+        Log.info("New client joined: " .. (info.clientName or "Unknown"))
     end
 end
 
--- 处理 ClientLeft (v2.0 新增)
 function SuperDataClient:handleClientLeft(payload)
     local clientId = payload.clientId or ""
     local info = self.otherClients[clientId]
-    
     if info then
-        gma.echo("[SuperData] Client left: " .. info.clientName)
+        Log.info("Client disconnected: " .. info.clientName)
         self.otherClients[clientId] = nil
-        
-        if self.onClientLeft then
-            self.onClientLeft(clientId)
-        end
     end
 end
 
--- 处理灯具列表响应 (v2.0)
 function SuperDataClient:handleFixtureListResponse(payload)
-    if not payload then return end
-    
-    local sourceId = payload.sourceClientId or ""
     self.fixtures = payload.fixtures or {}
-    
-    gma.echo("[SuperData] Received " .. #self.fixtures .. " fixtures from " .. sourceId:sub(1, 8) .. "...")
-    
-    -- 调试：显示前几个灯具
-    for i, f in ipairs(self.fixtures) do
-        if i <= 5 then
-            local fid = f.fixtureID or f.fixtureId or "?"
-            local u = f.universe or "?"
-            local a = f.startAddress or "?"
-            local name = f.name or "?"
-            gma.echo(string.format("[DEBUG] #%d: ID=%s, U%s.%s, %s", i, tostring(fid), tostring(u), tostring(a), name))
-        end
-    end
-    
-    if self.onFixturesReceived then
-        self.onFixturesReceived(sourceId, self.fixtures)
-    end
+    Log.info("Received " .. #self.fixtures .. " fixtures")
 end
 
--- 处理错误
-function SuperDataClient:handleError(payload)
-    local code = payload.errorCode or payload.code or 255
-    local message = payload.errorMessage or payload.message or "Unknown error"
-    
-    gma.echo("[SuperData] Server error [" .. code .. "]: " .. message)
-    
-    if self.onError then
-        self.onError(code, message)
-    end
-end
-
--- 发送数据包
 function SuperDataClient:sendPacket(packetType, payload)
     if not self.tcpSocket then return false end
-    
     local packet = self:buildPacket(packetType, payload)
-    local sent, err = self.tcpSocket:send(packet)
-    
-    if not sent then
-        gma.echo("[SuperData] Send error: " .. (err or "unknown"))
-        return false
-    end
-    
-    return true
+    local sent = self.tcpSocket:send(packet)
+    return sent ~= nil
 end
 
--- 发送心跳
 function SuperDataClient:sendHeartbeat()
     if not self.connected then return end
-    
     local now = gma.gettime()
     if now - self.lastHeartbeat >= SUPERDATA.HEARTBEAT_INTERVAL then
         self:sendPacket(SUPERDATA.PKT.HEARTBEAT, {})
@@ -939,165 +679,109 @@ function SuperDataClient:sendHeartbeat()
     end
 end
 
--- 请求灯具列表 (v2.0: 需要指定 sourceClientId)
 function SuperDataClient:requestFixtureList(sourceClientId)
-    if not self.connected then
-        gma.echo("[SuperData] Not connected")
-        return false
-    end
-    
-    gma.echo("[SuperData] Requesting fixtures from " .. sourceClientId:sub(1, 8) .. "...")
+    if not self.connected then return false end
+    Log.info("Requesting fixtures...")
     return self:sendPacket(SUPERDATA.PKT.FIXTURE_LIST_REQ, {
         clientId = self.clientInfo.clientId,
         sourceClientId = sourceClientId
     })
 end
 
--- 获取其他客户端列表
 function SuperDataClient:getOtherClients()
     return self.otherClients
 end
 
--- 获取灯具数据
 function SuperDataClient:getFixtures()
     return self.fixtures
 end
 
--- 更新循环
 function SuperDataClient:update()
     if self.connected then
-        -- 发送心跳
         self:sendHeartbeat()
-        
-        -- 接收和处理数据
         self:receiveData()
         self:processReceivedData()
     end
 end
 
--- 断开连接
 function SuperDataClient:disconnect()
     if self.tcpSocket then
         if self.connected then
-            self:sendPacket(SUPERDATA.PKT.DISCONNECT, {
-                clientId = self.clientInfo.clientId
-            })
+            pcall(function()
+                self:sendPacket(SUPERDATA.PKT.DISCONNECT, {clientId = self.clientInfo.clientId})
+            end)
         end
-        self.tcpSocket:close()
+        pcall(function() self.tcpSocket:close() end)
         self.tcpSocket = nil
     end
-    
     local wasConnected = self.connected
     self.connected = false
     self.otherClients = {}
+    self.fixtures = {}
     self.receiveBuffer = ""
-    
-    if wasConnected then
-        gma.echo("[SuperData] Disconnected")
-        if self.onDisconnected then
-            self.onDisconnected()
-        end
-    end
+    if wasConnected then Log.info("Disconnected") end
 end
 
--- ===========================================
+-- ═══════════════════════════════════════════════════════════════════════════
 -- MA2 灯具导入模块
--- ===========================================
+-- ═══════════════════════════════════════════════════════════════════════════
 local MA2Import = {}
 
--- 默认灯具类型（固定为 3，用户导入后自行替换）
 MA2Import.fixtureTypeId = 3
 MA2Import.fixtureTypeName = "Generic"
 
--- 检查 FixtureID 是否有重复
 function MA2Import.checkDuplicateIDs(fixtures)
     local idMap = {}
     local duplicates = {}
-    
     for i, f in ipairs(fixtures) do
         local id = f.fixtureID or f.fixtureId or i
-        if idMap[id] then
-            table.insert(duplicates, id)
-        else
-            idMap[id] = true
-        end
+        if idMap[id] then table.insert(duplicates, id)
+        else idMap[id] = true end
     end
-    
     return duplicates
 end
 
--- 生成 VectorWorks 风格的 Layers XML 用于导入灯具
 function MA2Import.generateLayersXML(fixtures, fixtureTypeName, fixtureTypeNo)
     local fixtureXMLs = {}
     
     for i, f in ipairs(fixtures) do
         local fixtureId = f.fixtureID or f.fixtureId or i
-        local universe = f.universe or 1
-        if universe < 1 then universe = 1 end
-        local address = f.startAddress or 1
-        if address < 1 then address = 1 end
-        local name = f.name or ("Fixture_" .. fixtureId)
-        name = name:gsub('"', ''):gsub('<', ''):gsub('>', ''):gsub('&', 'and')
-        
-        -- 计算绝对 DMX 地址
+        local universe = math.max(1, f.universe or 1)
+        local address = math.max(1, f.startAddress or 1)
+        local name = (f.name or ("Fixture_" .. fixtureId)):gsub('[<>&"]', '')
         local absoluteAddress = ((universe - 1) * 512) + address
         
-        -- 位置转换: 协议标准 (cm) → MA2 (m)
+        -- 位置转换: cm → m
         local posX, posY, posZ = 0, 0, 0
-        if f.position then
-            if type(f.position) == "table" then
-                if f.position[1] then
-                    posX = (f.position[1] or 0) / 100
-                    posY = (f.position[2] or 0) / 100
-                    posZ = (f.position[3] or 0) / 100
-                else
-                    posX = (f.position.x or 0) / 100
-                    posY = (f.position.y or 0) / 100
-                    posZ = (f.position.z or 0) / 100
-                end
+        if f.position and type(f.position) == "table" then
+            if f.position[1] then
+                posX, posY, posZ = (f.position[1] or 0) / 100, (f.position[2] or 0) / 100, (f.position[3] or 0) / 100
+            else
+                posX, posY, posZ = (f.position.x or 0) / 100, (f.position.y or 0) / 100, (f.position.z or 0) / 100
             end
         end
         
-        -- 旋转转换: SuperData Standard → MA2 (根据实测)
+        -- 旋转转换
         local rotX, rotY, rotZ = 0, 0, 0
-        if f.rotation then
-            if type(f.rotation) == "table" then
-                if f.rotation[1] then
-                    rotX = f.rotation[1] or 0
-                    rotY = f.rotation[2] or 0
-                    rotZ = f.rotation[3] or 0
-                else
-                    rotX = f.rotation.x or 0
-                    rotY = f.rotation.y or 0
-                    rotZ = f.rotation.z or 0
-                end
+        if f.rotation and type(f.rotation) == "table" then
+            if f.rotation[1] then
+                rotX, rotY, rotZ = f.rotation[1] or 0, f.rotation[2] or 0, f.rotation[3] or 0
+            else
+                rotX, rotY, rotZ = f.rotation.x or 0, f.rotation.y or 0, f.rotation.z or 0
             end
         end
-        
-        -- MA2 旋转修正: Y+180, Z+90
         rotY = rotY + 180
         rotZ = rotZ + 90
         
         local fixtureXML = string.format([[
 			<Fixture name="%s" fixture_id="%d" channel_id="">
-				<FixtureType name="%s">
-					<No>
-							%d
-					</No>
-				</FixtureType>
+				<FixtureType name="%s"><No>%d</No></FixtureType>
 				<SubFixture index="0" react_to_grandmaster="true" color="FFFFFF">
-					<Patch>
-						<Address>
-								%d
-						</Address>
-					</Patch>
+					<Patch><Address>%d</Address></Patch>
 					<AbsolutePosition>
-						<Location x="%.3f" y="%.3f" z="%.3f"
-/>
-						<Rotation x="%.2f" y="%.2f" z="%.2f"
-/>
-						<Scaling x="1.000" y="1.000" z="1.000"
-/>
+						<Location x="%.3f" y="%.3f" z="%.3f"/>
+						<Rotation x="%.2f" y="%.2f" z="%.2f"/>
+						<Scaling x="1.000" y="1.000" z="1.000"/>
 					</AbsolutePosition>
 				</SubFixture>
 			</Fixture>]], 
@@ -1107,50 +791,28 @@ function MA2Import.generateLayersXML(fixtures, fixtureTypeName, fixtureTypeNo)
         table.insert(fixtureXMLs, fixtureXML)
     end
     
-    local layerName = fixtureTypeName
-    local fixturesContent = table.concat(fixtureXMLs, "\n")
-    
-    local xml = string.format([[<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA">
+    return string.format([[<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA">
 	<InfoItems>
-		<Info type="Invisible" date="%s">
-				SuperData Protocol v2.0 Import
-		</Info>
+		<Info type="Invisible" date="%s">SuperData v%s Import</Info>
 	</InfoItems>
 	<Layers>
 		<Layer name="%s">
 %s
 		</Layer>
 	</Layers>
-</MA>]], os.date("%y/%m/%d"), layerName, fixturesContent)
-    
-    return xml
+</MA>]], os.date("%y/%m/%d"), VERSION.STRING, fixtureTypeName, table.concat(fixtureXMLs, "\n"))
 end
 
--- 导入灯具到 MA2
-function MA2Import.importFixtures(fixtures)
-    local success = 0
-    local failed = 0
-    
+function MA2Import.importFixtures(fixtures, progressCallback)
     if #fixtures == 0 then
-        gma.echo("[SuperData] No fixtures to import")
+        Log.info("No fixtures to import")
         return 0, 0
     end
     
-    local progress = gma.gui.progress.start("Importing fixtures...")
-    gma.gui.progress.setrange(progress, 0, 100)
-    gma.gui.progress.set(progress, 10)
+    if progressCallback then progressCallback("Generating XML...", 10) end
+    local xml = MA2Import.generateLayersXML(fixtures, MA2Import.fixtureTypeName, MA2Import.fixtureTypeId)
     
-    local fixtureTypeName = MA2Import.fixtureTypeName
-    local fixtureTypeNo = MA2Import.fixtureTypeId
-    
-    -- Step 1: 生成 XML
-    gma.gui.progress.settext(progress, "Generating XML...")
-    local xml = MA2Import.generateLayersXML(fixtures, fixtureTypeName, fixtureTypeNo)
-    
-    -- Step 2: 写入临时文件
-    gma.gui.progress.set(progress, 30)
-    gma.gui.progress.settext(progress, "Writing temp file...")
-    
+    if progressCallback then progressCallback("Writing file...", 30) end
     gma.cmd('SelectDrive 1')
     local showPath = gma.show.getvar("PATH")
     local tempFileName = "superdata_import"
@@ -1158,77 +820,74 @@ function MA2Import.importFixtures(fixtures)
     
     local file = io.open(tempFilePath, "w")
     if not file then
-        gma.gui.progress.stop(progress)
-        gma.echo("[SuperData] ERROR: Cannot create temp file!")
+        Log.error("Cannot create temp file")
         return 0, #fixtures
     end
     file:write(xml)
     file:close()
     
-    -- Step 3: 进入 EditSetup
-    gma.gui.progress.set(progress, 50)
-    gma.gui.progress.settext(progress, "Importing to MA2...")
+    if progressCallback then progressCallback("Importing to MA2...", 50) end
     gma.cmd('CD EditSetup')
     gma.sleep(0.2)
     
-    -- Step 4: 导入 Layers
-    local importCmd = 'Import "' .. tempFileName .. '" At Layers /nc'
-    gma.echo("[SuperData] " .. importCmd)
-    gma.cmd(importCmd)
+    gma.cmd('Import "' .. tempFileName .. '" At Layers /nc')
     gma.sleep(0.5)
     
-    -- Step 5: 返回根目录
     gma.cmd('CD /')
     gma.sleep(0.2)
     
-    -- Step 6: 清理临时文件
-    gma.gui.progress.set(progress, 90)
-    gma.gui.progress.settext(progress, "Cleaning up...")
+    if progressCallback then progressCallback("Cleaning up...", 90) end
     os.remove(tempFilePath)
     
-    gma.gui.progress.set(progress, 100)
-    gma.gui.progress.stop(progress)
-    
-    success = #fixtures
-    gma.echo("[SuperData] Import complete: " .. success .. " fixtures")
-    
-    return success, failed
+    Log.info("Import complete: " .. #fixtures .. " fixtures")
+    return #fixtures, 0
 end
 
--- ===========================================
--- GUI 模块 (v2.0 重构)
--- ===========================================
+-- ═══════════════════════════════════════════════════════════════════════════
+-- GUI 模块
+-- ═══════════════════════════════════════════════════════════════════════════
 local GUI = {}
 
--- 主菜单流程
+function GUI.showProgress(title, initialText)
+    local progress = gma.gui.progress.start(title)
+    gma.gui.progress.setrange(progress, 0, 100)
+    gma.gui.progress.settext(progress, initialText or "")
+    return progress
+end
+
+function GUI.updateProgress(progress, text, percent)
+    if progress then
+        gma.gui.progress.settext(progress, text)
+        gma.gui.progress.set(progress, percent)
+    end
+end
+
+function GUI.stopProgress(progress)
+    if progress then gma.gui.progress.stop(progress) end
+end
+
 function GUI.showMainMenu(client)
     -- Step 1: 连接服务器
-    local progress = gma.gui.progress.start("Connecting to SuperData Server...")
-    gma.gui.progress.setrange(progress, 0, 100)
-    gma.gui.progress.set(progress, 20)
+    local progress = GUI.showProgress("SuperData", "Connecting to server...")
+    GUI.updateProgress(progress, "Connecting...", 20)
     
-    local ok, err = client:connect(true)  -- 自动启动服务器
+    local ok, err = client:connect(true)
     
     if not ok then
-        gma.gui.progress.stop(progress)
-        gma.gui.msgbox("Connection Error", 
-            "Failed to connect to SuperData Server:\n\n" .. (err or "Unknown error") .. 
-            "\n\nPlease install SuperData Server from:\nhttps://yunsio.com/superdata")
+        GUI.stopProgress(progress)
+        gma.gui.msgbox("Connection Failed", err or "Unknown error")
         return
     end
     
-    gma.gui.progress.set(progress, 50)
-    gma.gui.progress.settext(progress, "Connected! Checking clients...")
+    GUI.updateProgress(progress, "Checking clients...", 60)
     gma.sleep(0.3)
-    
-    -- 处理一下可能的消息
     client:update()
     gma.sleep(0.2)
     client:update()
     
-    gma.gui.progress.stop(progress)
+    GUI.stopProgress(progress)
     
-    -- Step 2: 显示群聊成员列表
+    -- Step 2: 获取客户端列表
     local otherClients = client:getOtherClients()
     local clientCount = 0
     local clientList = {}
@@ -1245,28 +904,31 @@ function GUI.showMainMenu(client)
     
     if clientCount == 0 then
         gma.gui.msgbox("No Data Sources", 
-            "No other clients connected to SuperData Server.\n\n" ..
-            "Please start Unity/UE/VW with SuperData plugin first,\n" ..
-            "then try again.")
+            "No clients connected to SuperData Server.\n\n" ..
+            "Please start Unity / Unreal / Vectorworks\n" ..
+            "with SuperData plugin first.")
         client:disconnect()
         return
     end
     
-    -- Step 3: 显示可用数据源列表
-    local listMsg = "Found " .. clientCount .. " data source(s):\n\n"
+    -- Step 3: 显示可用数据源
+    local listMsg = "Available data sources:\n" ..
+                    string.rep("-", 32) .. "\n\n"
+    
     for i, c in ipairs(clientList) do
         local platformName = SUPERDATA.getPlatformName(c.platform)
-        listMsg = listMsg .. string.format("[%d] %s\n    Platform: %s\n    Fixtures: %d\n\n", 
+        listMsg = listMsg .. string.format(
+            "[%d]  %s\n" ..
+            "     Platform: %s\n" ..
+            "     Fixtures: %d\n\n",
             i, c.name, platformName, c.fixtureCount or 0)
     end
-    listMsg = listMsg .. "Click OK to select a source..."
     
-    -- 先显示列表
-    gma.gui.msgbox("Available Sources", listMsg)
+    gma.gui.msgbox("SuperData - Select Source", listMsg)
     
-    -- 再输入序号
-    local promptMsg = "Enter source number (1-" .. clientCount .. "):"
-    local choice = gma.textinput("Select Source", promptMsg)
+    -- Step 4: 输入选择
+    local choice = gma.textinput("Import from", "Enter number (1-" .. clientCount .. "):")
+    
     if not choice or choice == "" then
         client:disconnect()
         return
@@ -1274,172 +936,169 @@ function GUI.showMainMenu(client)
     
     local selectedIdx = tonumber(choice)
     if not selectedIdx or selectedIdx < 1 or selectedIdx > clientCount then
-        gma.gui.msgbox("Error", "Invalid selection: " .. tostring(choice) .. "\nPlease enter 1-" .. clientCount)
+        gma.gui.msgbox("Invalid Selection", 
+            "'" .. tostring(choice) .. "' is not valid.\n" ..
+            "Please enter a number from 1 to " .. clientCount)
         client:disconnect()
         return
     end
     
     local selectedClient = clientList[selectedIdx]
-    gma.echo("[SuperData] Selected: " .. selectedClient.name)
+    Log.info("Selected: " .. selectedClient.name)
     
-    -- Step 4: 请求灯具数据
-    local progress2 = gma.gui.progress.start("Requesting fixtures from " .. selectedClient.name .. "...")
-    gma.gui.progress.setrange(progress2, 0, 100)
-    gma.gui.progress.set(progress2, 30)
+    -- Step 5: 请求灯具数据
+    progress = GUI.showProgress("SuperData", "Requesting fixtures from " .. selectedClient.name .. "...")
+    GUI.updateProgress(progress, "Requesting...", 30)
     
     client:requestFixtureList(selectedClient.id)
     
-    -- 等待接收
-    gma.gui.progress.settext(progress2, "Receiving fixtures...")
+    GUI.updateProgress(progress, "Receiving data...", 50)
     
-    for i = 1, 100 do
-        gma.sleep(0.1)
+    local timeout = 10  -- 10 秒超时
+    local startTime = gma.gettime()
+    while gma.gettime() - startTime < timeout do
+        gma.sleep(0.05)
         client:update()
-        gma.gui.progress.set(progress2, 30 + i * 0.5)
-        if #client.fixtures > 0 then
-            gma.echo("[SuperData] Got " .. #client.fixtures .. " fixtures!")
-            break
-        end
+        local pct = 50 + ((gma.gettime() - startTime) / timeout) * 40
+        GUI.updateProgress(progress, "Receiving...", math.min(90, pct))
+        if #client.fixtures > 0 then break end
     end
     
-    gma.gui.progress.stop(progress2)
+    GUI.stopProgress(progress)
     
     local fixtures = client:getFixtures()
     if #fixtures == 0 then
-        gma.gui.msgbox("Error", "No fixtures received from " .. selectedClient.name .. "!")
+        gma.gui.msgbox("No Data", 
+            "No fixtures received from:\n" .. selectedClient.name .. "\n\n" ..
+            "Check if the source has fixture data.")
         client:disconnect()
         return
     end
     
-    -- Step 5: 确认导入
-    local confirmMsg = "Received " .. #fixtures .. " fixtures from:\n" ..
-                       selectedClient.name .. "\n\n"
+    -- Step 6: 确认导入
+    local confirmMsg = string.format(
+        "Received %d fixtures from:\n%s\n\n",
+        #fixtures, selectedClient.name)
     
-    for i = 1, math.min(8, #fixtures) do
+    local previewCount = math.min(6, #fixtures)
+    for i = 1, previewCount do
         local f = fixtures[i]
-        confirmMsg = confirmMsg .. f.name .. " (U" .. (f.universe or 1) .. "." .. (f.startAddress or 1) .. ")\n"
+        local u = f.universe or 1
+        local a = f.startAddress or 1
+        confirmMsg = confirmMsg .. string.format("  • %s (U%d.%03d)\n", f.name or "Fixture", u, a)
     end
-    if #fixtures > 8 then
-        confirmMsg = confirmMsg .. "... and " .. (#fixtures - 8) .. " more\n"
-    end
-    confirmMsg = confirmMsg .. "\nPatch to MA2?"
     
-    if not gma.gui.confirm("Import Fixtures?", confirmMsg) then
+    if #fixtures > previewCount then
+        confirmMsg = confirmMsg .. string.format("  ... and %d more\n", #fixtures - previewCount)
+    end
+    
+    confirmMsg = confirmMsg .. "\nImport to MA2 now?"
+    
+    if not gma.gui.confirm("Confirm Import", confirmMsg) then
         client:disconnect()
         return
     end
     
-    -- Step 6: 检查重复 ID
+    -- Step 7: 检查重复 ID
     local duplicates = MA2Import.checkDuplicateIDs(fixtures)
     if #duplicates > 0 then
-        local dupStr = table.concat(duplicates, ", ")
-        gma.gui.msgbox("ERROR: Duplicate FixtureID!", 
-            "Found duplicate FixtureID(s): " .. dupStr .. "\n\n" ..
-            "Please fix in " .. selectedClient.name .. " first!")
+        gma.gui.msgbox("Data Error", 
+            "Duplicate FixtureID found: " .. table.concat(duplicates, ", ") .. "\n\n" ..
+            "Please fix in " .. selectedClient.name .. " first.")
         client:disconnect()
         return
     end
     
-    -- Step 7: 执行导入
-    local success, failed = MA2Import.importFixtures(fixtures)
+    -- Step 8: 执行导入
+    progress = GUI.showProgress("Importing", "Preparing...")
     
-    -- Step 8: 显示结果
+    local success, failed = MA2Import.importFixtures(fixtures, function(text, pct)
+        GUI.updateProgress(progress, text, pct)
+    end)
+    
+    GUI.updateProgress(progress, "Complete!", 100)
+    gma.sleep(0.3)
+    GUI.stopProgress(progress)
+    
+    -- Step 9: 显示结果
     if success > 0 then
-        gma.gui.msgbox("Import Complete!", 
-            "Added: " .. success .. " fixtures\n" ..
-            "Failed: " .. failed .. "\n\n" ..
-            "IMPORTANT: Replace fixture types in\n" ..
-            "Setup > Patch > Fixture Types if needed!")
+        gma.gui.msgbox("Import Complete", 
+            string.format("Successfully imported %d fixtures.\n\n", success) ..
+            "Note: Fixture types are set to 'Generic'.\n" ..
+            "Go to Setup > Patch > Fixture Types\n" ..
+            "to replace with correct types if needed.")
     else
-        gma.gui.msgbox("Import Failed", "No fixtures were imported.\nFailed: " .. failed)
+        gma.gui.msgbox("Import Failed", 
+            "No fixtures were imported.\n" ..
+            "Check System Monitor for details.")
     end
     
     client:disconnect()
-    gma.echo("[SuperData] Complete!")
+    Log.info("Session complete")
 end
 
--- ===========================================
+-- ═══════════════════════════════════════════════════════════════════════════
 -- 主程序
--- ===========================================
+-- ═══════════════════════════════════════════════════════════════════════════
 local client = nil
 local running = false
 
--- 更新回调
 function UpdateCallback(timer, count)
     if client and running then
-        client:update()
+        pcall(function() client:update() end)
     end
 end
 
--- 启动函数
 function Start()
-    gma.echo("=========================================")
-    gma.echo("   SuperData Protocol Client v2.0.0")
-    gma.echo("   for GrandMA2 (群聊模式)")
-    gma.echo("=========================================")
+    Log.info(string.rep("=", 50))
+    Log.info("SuperData Client v" .. VERSION.STRING)
+    Log.info("Protocol: SuperData v" .. SUPERDATA.VERSION_STRING)
+    Log.info(string.rep("=", 50))
     
-    -- 创建客户端实例
-    client = setmetatable({}, {__index = SuperDataClient})
-    
-    -- 显示欢迎界面
-    local welcome = [[
-SuperData Protocol Client v2.0.0
-─────────────────────────────────
+    -- 欢迎界面
+    local welcome = string.format([[
+SuperData for GrandMA2
+Version %s
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Cross-platform fixture data sync
-for Unity / Unreal / Vectorworks
+Import fixture data from:
+  • Unity
+  • Unreal Engine
+  • Vectorworks
 
-v2.0 Features:
-• Auto-start server
-• Session-based group chat
-• Select import source
-
-Developed by Yunsio SuperStage
-
-─────────────────────────────────
-Press OK to connect...]]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+© Yunsio SuperStage Team
+]], VERSION.STRING)
     
     if not gma.gui.confirm("SuperData", welcome) then
         return
     end
     
     -- 初始化
-    local progress = gma.gui.progress.start("Initializing...")
-    gma.gui.progress.setrange(progress, 0, 100)
-    gma.gui.progress.set(progress, 30)
+    client = SuperDataClient.new()
     
     if not client:init() then
-        gma.gui.progress.stop(progress)
-        gma.gui.msgbox("Error", "Failed to initialize SuperData client")
+        gma.gui.msgbox("Error", "Failed to initialize client.\nCheck System Monitor for details.")
         return
     end
     
-    gma.gui.progress.set(progress, 70)
-    
     running = true
-    
-    -- 启动更新定时器
     gma.timer(UpdateCallback, 0.1, 0, Cleanup)
     
-    gma.gui.progress.set(progress, 100)
-    gma.gui.progress.stop(progress)
-    
-    -- 显示主菜单
+    -- 主菜单
     GUI.showMainMenu(client)
 end
 
--- 清理函数
 function Cleanup()
-    gma.echo("[SuperData] Cleanup called")
+    Log.info("Cleanup")
     running = false
-    
     if client then
-        client:disconnect()
+        pcall(function() client:disconnect() end)
         client = nil
     end
 end
 
--- ===========================================
+-- ═══════════════════════════════════════════════════════════════════════════
 -- 返回入口函数
--- ===========================================
+-- ═══════════════════════════════════════════════════════════════════════════
 return Start, Cleanup
