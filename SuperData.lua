@@ -741,6 +741,37 @@ function MA2Import.checkDuplicateIDs(fixtures)
     return duplicates
 end
 
+function MA2Import.buildFixtureRange(ids)
+    if #ids == 0 then return "" end
+    if #ids == 1 then return tostring(ids[1]) end
+    
+    local ranges = {}
+    local rangeStart = ids[1]
+    local rangeEnd = ids[1]
+    
+    for i = 2, #ids do
+        if ids[i] == rangeEnd + 1 then
+            rangeEnd = ids[i]
+        else
+            if rangeStart == rangeEnd then
+                table.insert(ranges, tostring(rangeStart))
+            else
+                table.insert(ranges, rangeStart .. " Thru " .. rangeEnd)
+            end
+            rangeStart = ids[i]
+            rangeEnd = ids[i]
+        end
+    end
+    
+    if rangeStart == rangeEnd then
+        table.insert(ranges, tostring(rangeStart))
+    else
+        table.insert(ranges, rangeStart .. " Thru " .. rangeEnd)
+    end
+    
+    return table.concat(ranges, " + ")
+end
+
 function MA2Import.generateLayersXML(fixtures, fixtureTypeName, fixtureTypeNo)
     -- 按灯具类型分组
     local fixturesByType = {}
@@ -882,10 +913,59 @@ function MA2Import.importFixtures(fixtures, progressCallback)
     gma.cmd('CD /')
     gma.sleep(0.2)
     
+    -- 为每个灯具类型创建灯组
+    if progressCallback then progressCallback("Creating groups...", 70) end
+    
+    -- 收集每个类型的灯具ID
+    local fixtureIdsByType = {}
+    for _, f in ipairs(fixtures) do
+        local fType = f.fixtureType or f.type or f.fixtureTypeName or "Generic"
+        fType = tostring(fType):gsub('[<>&"]', '')
+        local fixtureId = f.fixtureID or f.fixtureId
+        
+        if fixtureId then
+            if not fixtureIdsByType[fType] then
+                fixtureIdsByType[fType] = {}
+            end
+            table.insert(fixtureIdsByType[fType], fixtureId)
+        end
+    end
+    
+    -- 为每个类型创建灯组
+    local groupCount = 0
+    for fType, ids in pairs(fixtureIdsByType) do
+        if #ids > 0 then
+            -- 排序ID列表
+            table.sort(ids)
+            
+            -- 构建灯具选择范围
+            local fixtureRange = MA2Import.buildFixtureRange(ids)
+            
+            -- 创建灯组命令
+            local groupName = "GRP_" .. fType
+            local cmd = string.format('Store Group "%s"', groupName)
+            
+            -- 先选择灯具
+            gma.cmd('ClearAll')
+            gma.sleep(0.05)
+            gma.cmd('Fixture ' .. fixtureRange)
+            gma.sleep(0.1)
+            
+            -- 存储灯组
+            gma.cmd(cmd)
+            gma.sleep(0.1)
+            
+            groupCount = groupCount + 1
+            Log.info("Created group: " .. groupName .. " (" .. #ids .. " fixtures)")
+        end
+    end
+    
+    gma.cmd('ClearAll')
+    
     if progressCallback then progressCallback("Cleaning up...", 90) end
     os.remove(tempFilePath)
     
-    Log.info("Import complete: " .. #fixtures .. " fixtures")
+    Log.info("Import complete: " .. #fixtures .. " fixtures, " .. groupCount .. " groups")
     return #fixtures, 0
 end
 
