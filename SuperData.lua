@@ -742,38 +742,59 @@ function MA2Import.checkDuplicateIDs(fixtures)
 end
 
 function MA2Import.generateLayersXML(fixtures, fixtureTypeName, fixtureTypeNo)
-    local fixtureXMLs = {}
+    -- 按灯具类型分组
+    local fixturesByType = {}
+    local typeOrder = {}  -- 保持类型顺序
     
     for i, f in ipairs(fixtures) do
-        local fixtureId = f.fixtureID or f.fixtureId or i
-        local universe = math.max(1, f.universe or 1)
-        local address = math.max(1, f.startAddress or 1)
-        local name = (f.name or ("Fixture_" .. fixtureId)):gsub('[<>&"]', '')
-        local absoluteAddress = ((universe - 1) * 512) + address
+        -- 获取灯具类型，支持多种字段名
+        local fType = f.fixtureType or f.type or f.fixtureTypeName or "Generic"
+        fType = tostring(fType):gsub('[<>&"]', '')  -- 清理XML非法字符
         
-        -- 位置转换: cm → m
-        local posX, posY, posZ = 0, 0, 0
-        if f.position and type(f.position) == "table" then
-            if f.position[1] then
-                posX, posY, posZ = (f.position[1] or 0) / 100, (f.position[2] or 0) / 100, (f.position[3] or 0) / 100
-            else
-                posX, posY, posZ = (f.position.x or 0) / 100, (f.position.y or 0) / 100, (f.position.z or 0) / 100
-            end
+        if not fixturesByType[fType] then
+            fixturesByType[fType] = {}
+            table.insert(typeOrder, fType)
         end
+        table.insert(fixturesByType[fType], f)
+    end
+    
+    -- 生成多个Layer的XML
+    local layerXMLs = {}
+    
+    for _, fType in ipairs(typeOrder) do
+        local fixturesInType = fixturesByType[fType]
+        local fixtureXMLs = {}
         
-        -- 旋转转换
-        local rotX, rotY, rotZ = 0, 0, 0
-        if f.rotation and type(f.rotation) == "table" then
-            if f.rotation[1] then
-                rotX, rotY, rotZ = f.rotation[1] or 0, f.rotation[2] or 0, f.rotation[3] or 0
-            else
-                rotX, rotY, rotZ = f.rotation.x or 0, f.rotation.y or 0, f.rotation.z or 0
+        for i, f in ipairs(fixturesInType) do
+            local fixtureId = f.fixtureID or f.fixtureId or i
+            local universe = math.max(1, f.universe or 1)
+            local address = math.max(1, f.startAddress or 1)
+            local name = (f.name or ("Fixture_" .. fixtureId)):gsub('[<>&"]', '')
+            local absoluteAddress = ((universe - 1) * 512) + address
+            
+            -- 位置转换: cm → m
+            local posX, posY, posZ = 0, 0, 0
+            if f.position and type(f.position) == "table" then
+                if f.position[1] then
+                    posX, posY, posZ = (f.position[1] or 0) / 100, (f.position[2] or 0) / 100, (f.position[3] or 0) / 100
+                else
+                    posX, posY, posZ = (f.position.x or 0) / 100, (f.position.y or 0) / 100, (f.position.z or 0) / 100
+                end
             end
-        end
-        rotY = rotY + 180
-        rotZ = rotZ + 90
-        
-        local fixtureXML = string.format([[
+            
+            -- 旋转转换
+            local rotX, rotY, rotZ = 0, 0, 0
+            if f.rotation and type(f.rotation) == "table" then
+                if f.rotation[1] then
+                    rotX, rotY, rotZ = f.rotation[1] or 0, f.rotation[2] or 0, f.rotation[3] or 0
+                else
+                    rotX, rotY, rotZ = f.rotation.x or 0, f.rotation.y or 0, f.rotation.z or 0
+                end
+            end
+            rotY = rotY + 180
+            rotZ = rotZ + 90
+            
+            local fixtureXML = string.format([[
 			<Fixture name="%s" fixture_id="%d" channel_id="">
 				<FixtureType name="%s"><No>%d</No></FixtureType>
 				<SubFixture index="0" react_to_grandmaster="true" color="FFFFFF">
@@ -785,22 +806,30 @@ function MA2Import.generateLayersXML(fixtures, fixtureTypeName, fixtureTypeNo)
 					</AbsolutePosition>
 				</SubFixture>
 			</Fixture>]], 
-            name, fixtureId, fixtureTypeName, fixtureTypeNo,
-            absoluteAddress, posX, posY, posZ, rotX, rotY, rotZ)
+                name, fixtureId, fixtureTypeName, fixtureTypeNo,
+                absoluteAddress, posX, posY, posZ, rotX, rotY, rotZ)
+            
+            table.insert(fixtureXMLs, fixtureXML)
+        end
         
-        table.insert(fixtureXMLs, fixtureXML)
-    end
-    
-    return string.format([[<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA">
-	<InfoItems>
-		<Info type="Invisible" date="%s">SuperData v%s Import</Info>
-	</InfoItems>
-	<Layers>
+        -- 为每个类型生成一个Layer
+        local layerXML = string.format([[
 		<Layer name="%s">
 %s
-		</Layer>
+		</Layer>]], fType, table.concat(fixtureXMLs, "\n"))
+        
+        table.insert(layerXMLs, layerXML)
+    end
+    
+    -- 生成完整的MA XML文档
+    return string.format([[<MA xmlns="http://schemas.malighting.de/grandma2/xml/MA">
+	<InfoItems>
+		<Info type="Invisible" date="%s">SuperData v%s Import (%d types)</Info>
+	</InfoItems>
+	<Layers>
+%s
 	</Layers>
-</MA>]], os.date("%y/%m/%d"), VERSION.STRING, fixtureTypeName, table.concat(fixtureXMLs, "\n"))
+</MA>]], os.date("%y/%m/%d"), VERSION.STRING, #typeOrder, table.concat(layerXMLs, "\n"))
 end
 
 function MA2Import.importFixtures(fixtures, progressCallback)
@@ -809,7 +838,24 @@ function MA2Import.importFixtures(fixtures, progressCallback)
         return 0, 0
     end
     
-    if progressCallback then progressCallback("Generating XML...", 10) end
+    if progressCallback then progressCallback("Analyzing fixture types...", 10) end
+    
+    -- 统计灯具类型分布
+    local typeStats = {}
+    for _, f in ipairs(fixtures) do
+        local fType = f.fixtureType or f.type or f.fixtureTypeName or "Generic"
+        fType = tostring(fType):gsub('[<>&"]', '')
+        typeStats[fType] = (typeStats[fType] or 0) + 1
+    end
+    
+    -- 输出分类信息
+    local typeCount = 0
+    for _ in pairs(typeStats) do typeCount = typeCount + 1 end
+    Log.info("Fixture classification: " .. typeCount .. " types detected")
+    for fType, count in pairs(typeStats) do
+        Log.info("  - " .. fType .. ": " .. count .. " fixtures")
+    end
+    
     local xml = MA2Import.generateLayersXML(fixtures, MA2Import.fixtureTypeName, MA2Import.fixtureTypeId)
     
     if progressCallback then progressCallback("Writing file...", 30) end
